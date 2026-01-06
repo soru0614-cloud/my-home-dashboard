@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { MOCK_MISSIONS, MOCK_TRANSACTIONS, MOCK_NOTICES, MOCK_VOTES, MOCK_USERS, Mission } from '@/lib/data';
+import { MOCK_MISSIONS, MOCK_TRANSACTIONS, MOCK_NOTICES, MOCK_VOTES, MOCK_USERS, Mission, User, Vote, Notice, Transaction } from '@/lib/data';
+import { supabase } from '@/lib/supabase';
 import { MissionList } from '@/components/features/MissionList';
 import { TransactionList } from '@/components/features/TransactionList';
 import { AllowanceControl } from '@/components/features/AllowanceControl';
@@ -13,32 +14,62 @@ export default function ParentDashboard() {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [pin, setPin] = useState('');
 
-    const [missions, setMissions] = useState(MOCK_MISSIONS);
-    const [users, setUsers] = useState(MOCK_USERS);
-    const [transactions, setTransactions] = useState(MOCK_TRANSACTIONS);
-    const [notices, setNotices] = useState(MOCK_NOTICES); // Add state for notices
-    const [votes, setVotes] = useState(MOCK_VOTES); // Add state for votes
+    const [missions, setMissions] = useState<Mission[]>([]);
+    const [users, setUsers] = useState<User[]>([]);
+    const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [notices, setNotices] = useState<Notice[]>([]); // Add state for notices
+    const [votes, setVotes] = useState<Vote[]>([]); // Add state for votes
     const [editingMission, setEditingMission] = useState<Mission | null>(null);
     const [isAddingMission, setIsAddingMission] = useState(false);
-    const [newMission, setNewMission] = useState<Partial<Mission>>({ title: '', stickers: 1, allowanceReward: 0, userId: MOCK_USERS[0].id });
+    const [newMission, setNewMission] = useState<Partial<Mission>>({ title: '', stickers: 1, allowanceReward: 0, userId: '' });
+    const [isLoading, setIsLoading] = useState(true);
+    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-    // Load users from localStorage on mount
+
+    // Fetch initial data from Supabase
     useEffect(() => {
-        const savedUsers = localStorage.getItem('magnetar_users');
-        if (savedUsers) {
-            setUsers(JSON.parse(savedUsers));
-        } else {
-            // Initialize localStorage if empty
-            localStorage.setItem('magnetar_users', JSON.stringify(MOCK_USERS));
-        }
+        const fetchData = async () => {
+            setIsLoading(true);
+            const { data: usersData } = await supabase.from('profiles').select('*');
+            const { data: missionsData } = await supabase.from('missions').select('*').order('created_at', { ascending: false });
+            const { data: transactionsData } = await supabase.from('transactions').select('*').order('created_at', { ascending: false });
+            const { data: noticesData } = await supabase.from('notices').select('*').order('created_at', { ascending: false });
+            const { data: votesData } = await supabase.from('votes').select('*').order('created_at', { ascending: false });
 
-        const handleStorageChange = () => {
-            const saved = localStorage.getItem('magnetar_users');
-            if (saved) setUsers(JSON.parse(saved));
+            if (usersData) setUsers(usersData as any);
+            if (missionsData) setMissions(missionsData as any);
+            if (transactionsData) setTransactions(transactionsData as any);
+            if (noticesData) setNotices(noticesData as any);
+            if (votesData) setVotes(votesData as any);
+            setIsLoading(false);
         };
 
-        window.addEventListener('storage', handleStorageChange);
-        return () => window.removeEventListener('storage', handleStorageChange);
+        fetchData();
+
+        // Realtime Subscription
+        const channel = supabase
+            .channel('db-changes')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
+                if (payload.eventType === 'INSERT') setUsers(prev => [...prev, payload.new as any]);
+                if (payload.eventType === 'UPDATE') setUsers(prev => prev.map(u => u.id === payload.new.id ? payload.new as any : u));
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'missions' }, (payload) => {
+                if (payload.eventType === 'INSERT') setMissions(prev => [payload.new as any, ...prev]);
+                if (payload.eventType === 'UPDATE') setMissions(prev => prev.map(m => m.id === payload.new.id ? payload.new as any : m));
+                if (payload.eventType === 'DELETE') setMissions(prev => prev.filter(m => m.id !== payload.old.id));
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+                if (payload.eventType === 'INSERT') setTransactions(prev => [payload.new as any, ...prev]);
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'votes' }, (payload) => {
+                if (payload.eventType === 'INSERT') setVotes(prev => [payload.new as any, ...prev]);
+                if (payload.eventType === 'UPDATE') setVotes(prev => prev.map(v => v.id === payload.new.id ? payload.new as any : v));
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
     }, []);
 
     const handleLogin = (e: React.FormEvent) => {
@@ -51,53 +82,86 @@ export default function ParentDashboard() {
         }
     };
 
-    const handleApprove = (id: string) => {
-        setMissions(missions.map(m =>
-            m.id === id ? { ...m, status: 'approved' } : m
-        ));
-        // In real app, increment sticker count for child via API
-    };
-
     const startEdit = (mission: Mission) => {
         setEditingMission(mission);
     };
 
-    const saveEdit = (e: React.FormEvent) => {
+    const saveEdit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!editingMission) return;
-        setMissions(missions.map(m => m.id === editingMission.id ? editingMission : m));
-        setEditingMission(null);
+        await supabase.from('missions').update({
+            title: editingMission.title,
+            reward: editingMission.stickers,
+            money: editingMission.allowanceReward,
+        }).match({ id: editingMission.id });
         setEditingMission(null);
     };
 
-    const handleReject = (id: string) => {
-        setMissions(missions.map(m =>
-            m.id === id ? { ...m, status: 'pending' } : m
-        ));
-    };
-
-    const handleDelete = (id: string) => {
+    const handleDelete = async (id: string) => {
         if (confirm('정말 삭제하시겠습니까?')) {
-            setMissions(missions.filter(m => m.id !== id));
+            await supabase.from('missions').delete().match({ id });
+            // State update handled by subscription
         }
     };
 
-    const handleAddMission = (e: React.FormEvent) => {
+    const handleAddMission = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newMission.title || !newMission.userId) return;
 
-        const mission: Mission = {
-            id: Date.now().toString(),
-            userId: newMission.userId,
+        await supabase.from('missions').insert([{
             title: newMission.title,
-            stickers: newMission.stickers || 1,
-            allowanceReward: newMission.allowanceReward,
+            reward: newMission.stickers,
+            money: newMission.allowanceReward,
+            user_id: newMission.userId,
             status: 'pending'
-        };
-
-        setMissions([...missions, mission]);
+        }]);
         setIsAddingMission(false);
-        setNewMission({ title: '', stickers: 1, allowanceReward: 0, userId: MOCK_USERS[0].id });
+        setNewMission({ title: '', stickers: 1, allowanceReward: 0, userId: '' }); // Reset form
+    };
+
+    const handleReject = async (id: string) => {
+        await supabase.from('missions').update({ status: 'pending' }).match({ id });
+    };
+
+    const handleApprove = async (id: string) => {
+        const mission = missions.find(m => m.id === id);
+        if (!mission) return;
+
+        // Start transaction for approval (update mission + update user stats + add transaction record)
+        // For simplicity, doing sequential requests. In prod, use RPC.
+        await supabase.from('missions').update({ status: 'verified' }).match({ id });
+
+        const user = users.find(u => u.id === mission.userId);
+        if (user) {
+            const newStickers = user.stickers + mission.stickers;
+            const newAllowance = user.allowance + (mission.allowanceReward || 0);
+
+            await supabase.from('profiles').update({ stickers: newStickers, allowance: newAllowance }).match({ id: mission.userId });
+
+            if (mission.allowanceReward && mission.allowanceReward > 0) {
+                await supabase.from('transactions').insert([{
+                    amount: mission.allowanceReward,
+                    description: `미션 성공: ${mission.title}`,
+                    type: 'earned',
+                    user_id: mission.userId
+                }]);
+            }
+        }
+    };
+
+    const handleAllowanceAdjust = async (userId: string, amount: number) => {
+        const user = users.find(u => u.id === userId);
+        if (!user) return;
+
+        const newAllowance = user.allowance + amount;
+        await supabase.from('profiles').update({ allowance: newAllowance }).match({ id: userId });
+
+        await supabase.from('transactions').insert([{
+            amount: Math.abs(amount),
+            description: amount > 0 ? '용돈 지급' : '용돈 차감',
+            type: amount > 0 ? 'adjustment' : 'spent',
+            user_id: userId
+        }]);
     };
 
     if (!isAuthenticated) {
@@ -122,6 +186,14 @@ export default function ParentDashboard() {
                         <Button variant="ghost">돌아가기</Button>
                     </Link>
                 </form>
+            </div>
+        );
+    }
+
+    if (isLoading) {
+        return (
+            <div className="container" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', gap: '2rem' }}>
+                <h1 style={{ fontSize: '2rem', color: 'var(--parent-primary)' }}>데이터 로딩 중...</h1>
             </div>
         );
     }
@@ -185,6 +257,7 @@ export default function ParentDashboard() {
                             onChange={e => setNewMission({ ...newMission, userId: e.target.value })}
                             style={{ padding: '0.5rem', border: '1px solid #ccc', borderRadius: '4px' }}
                         >
+                            <option value="">아이를 선택하세요</option>
                             {users.map(u => (
                                 <option key={u.id} value={u.id}>{u.name}</option>
                             ))}
@@ -224,7 +297,10 @@ export default function ParentDashboard() {
             )}
 
             <div className="glass" style={{ padding: '2rem', marginBottom: '2rem', backgroundColor: 'white' }}>
-                <h2 style={{ marginBottom: '1rem', color: 'var(--parent-text)' }}>미션 관리</h2>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                    <h2 style={{ color: 'var(--parent-text)' }}>미션 관리</h2>
+                    <Button variant="primary" onClick={() => setIsAddingMission(true)}>+ 미션 추가</Button>
+                </div>
                 <MissionList
                     missions={missions}
                     role="parent"
@@ -233,16 +309,9 @@ export default function ParentDashboard() {
                     onEdit={startEdit}
                     onDelete={handleDelete}
                 />
-                <div style={{ marginTop: '1rem', textAlign: 'right' }}>
-                    <Button variant="primary" size="sm" onClick={() => setIsAddingMission(true)}>+ 미션 추가</Button>
-                </div>
             </div>
 
-            <AllowanceControl users={users} onAdjust={(u, a) => {
-                setUsers(users.map(user => user.id === u ? { ...user, allowance: user.allowance + a } : user));
-                const newTx: any = { id: Date.now().toString(), userId: u, date: new Date().toISOString().split('T')[0], amount: Math.abs(a), description: a > 0 ? '부모님 용돈 지급' : '부모님 용돈 차감', type: a > 0 ? 'income' : 'expense' };
-                setTransactions([newTx, ...transactions]);
-            }} />
+            <AllowanceControl users={users} onAdjust={handleAllowanceAdjust} />
 
             <div className="glass" style={{ padding: '2rem', marginBottom: '2rem', backgroundColor: 'white' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
@@ -255,21 +324,16 @@ export default function ParentDashboard() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                     <h2 style={{ color: 'var(--parent-text)' }}>우리집 게시판</h2>
                 </div>
-                {/* Notices now handle editing internally, but ideally we lift state if we want persistence across reloads simulated better. 
-                    Simple pass-through for now as NoticeBoard handles its own editing via initialNotices, 
-                    but to make it 'real' we should probably lift state or pass a handler. 
-                    Given the NoticeBoard impl uses internal state initialized from props, 
-                    we'll just let it be independent for MVP or update it to use controlled state if preferred.
-                    The previous step implemented internal state in NoticeBoard. 
-                    So we don't strictly need onUpdate unless we want to reflect it elsewhere. 
-                    We will leave it as is but pass key to force re-render if needed? No, internal state is fine for now.
-                 */}
                 <NoticeBoard notices={notices} />
                 <div style={{ marginTop: '2rem', borderTop: '1px solid #eee', paddingTop: '1rem' }}>
                     <VotingSystem
                         initialVote={votes[0]}
-                        onUpdate={(updatedVote) => {
-                            setVotes(votes.map(v => v.id === updatedVote.id ? updatedVote : v));
+                        onUpdate={async (updatedVote) => {
+                            await supabase.from('votes').update({
+                                title: updatedVote.title,
+                                options: updatedVote.options,
+                                deadline: updatedVote.deadline
+                            }).match({ id: updatedVote.id });
                             alert('투표가 수정되었습니다.');
                         }}
                     />

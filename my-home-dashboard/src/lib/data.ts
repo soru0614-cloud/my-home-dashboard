@@ -46,9 +46,16 @@ export const MOCK_TRANSACTIONS: Transaction[] = [
     { id: '3', userId: 'u2', date: '2023-10-05', amount: 3000, description: '심부름 보너스', type: 'income' },
 ];
 
-export const MOCK_NOTICES = [
-    "이번 주말에 할머니 오신대! 👵",
-    "금요일까지 수학 숙제 제출하기! 📚",
+export interface Notice {
+    id: string;
+    content: string;
+    date?: string;
+    author?: string;
+}
+
+export const MOCK_NOTICES: Notice[] = [
+    { id: '1', content: "이번 주말에 할머니 오신대! 👵", date: '2023-10-27', author: 'mom' },
+    { id: '2', content: "금요일까지 수학 숙제 제출하기! 📚", date: '2023-10-25', author: 'dad' },
 ];
 
 export interface VoteOption {

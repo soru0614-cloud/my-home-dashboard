@@ -1,15 +1,26 @@
 'use client';
 import { useState } from 'react';
+import { Notice } from '@/lib/data';
 import { Button } from '@/components/ui/Button';
 
-export const NoticeBoard = ({ notices: initialNotices, readOnly = false }: { notices: string[], readOnly?: boolean }) => {
+export const NoticeBoard = ({ notices: initialNotices, readOnly = false }: { notices: Notice[], readOnly?: boolean }) => {
     const [notices, setNotices] = useState(initialNotices);
     const [isEditing, setIsEditing] = useState(false);
-    const [editContent, setEditContent] = useState(initialNotices.join('\n'));
+    const [editContent, setEditContent] = useState(initialNotices.map(n => n.content).join('\n'));
 
     const handleSave = () => {
-        setNotices(editContent.split('\n').filter(n => n.trim() !== ''));
+        // Simplified for MVP: split by newline and recreate objects. 
+        // In real app, we should probably handle CRUD properly.
+        const newNotices = editContent.split('\n').filter(n => n.trim() !== '').map((content, idx) => ({
+            id: Date.now().toString() + idx,
+            content: content,
+            date: new Date().toISOString().split('T')[0],
+            author: 'admin'
+        }));
+        setNotices(newNotices);
         setIsEditing(false);
+        // Note: Props update from parent (Supabase) will overwrite this unless we also update up. 
+        // For now, this is local optimistic update.
     };
     return (
         <div className="glass" style={{
@@ -40,8 +51,8 @@ export const NoticeBoard = ({ notices: initialNotices, readOnly = false }: { not
                 </div>
             ) : (
                 <ul style={{ paddingLeft: '1.2rem', color: '#92400e' }}>
-                    {notices.map((n, i) => (
-                        <li key={i} style={{ marginBottom: '0.5rem', fontWeight: 500 }}>{n}</li>
+                    {notices.map((n) => (
+                        <li key={n.id} style={{ marginBottom: '0.5rem', fontWeight: 500 }}>{n.content}</li>
                     ))}
                 </ul>
             )}

@@ -47,6 +47,18 @@ export const AllowanceControl = ({ users, onAdjust }: AllowanceControlProps) => 
                     <h4 style={{ marginBottom: '0.5rem' }}>
                         {users.find(u => u.id === selectedUser)?.name}에게 {isAdding ? '지급' : '차감'}
                     </h4>
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', overflowX: 'auto', paddingBottom: '0.5rem' }}>
+                        {users.map(u => (
+                            <Button
+                                key={u.id}
+                                variant={selectedUser === u.id ? 'primary' : 'ghost'}
+                                onClick={() => setSelectedUser(u.id)}
+                                style={{ flexShrink: 0 }}
+                            >
+                                {u.name}
+                            </Button>
+                        ))}
+                    </div>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
                         <input
                             type="number"

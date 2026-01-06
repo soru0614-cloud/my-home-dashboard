@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { MOCK_MISSIONS, MOCK_USERS, MOCK_TRANSACTIONS, MOCK_NOTICES, MOCK_VOTES, User } from '@/lib/data';
+import { MOCK_MISSIONS, MOCK_USERS, MOCK_TRANSACTIONS, MOCK_NOTICES, MOCK_VOTES, User, Mission, Transaction, Notice, Vote } from '@/lib/data';
+import { supabase } from '@/lib/supabase';
 import { StickerBoard } from '@/components/features/StickerBoard';
 import { MissionList } from '@/components/features/MissionList';
 import { AllowanceDisplay } from '@/components/features/AllowanceDisplay';
@@ -14,57 +15,95 @@ import { Button } from '@/components/ui/Button';
 
 export default function ChildDashboard() {
     const [user, setUser] = useState<User | null>(null);
-    const [missions, setMissions] = useState(MOCK_MISSIONS);
+    const [missions, setMissions] = useState<Mission[]>([]);
+    const [users, setUsers] = useState<User[]>([]);
+    const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [notices, setNotices] = useState<Notice[]>([]);
+    const [votes, setVotes] = useState<Vote[]>([]);
     const [isEditingProfile, setIsEditingProfile] = useState(false);
-    const [users, setUsers] = useState(MOCK_USERS);
+    const [isLoading, setIsLoading] = useState(true);
 
-    // Initialize from localStorage on mount and sync
+    // Fetch initial data from Supabase
     useEffect(() => {
-        const savedUsers = localStorage.getItem('magnetar_users');
-        if (savedUsers) {
-            const parsedUsers = JSON.parse(savedUsers);
-            // Only update users list if changed, prevents loop if we rely on it, but setUsers is safe-ish. 
-            // Better to just set it. 
-            setUsers(parsedUsers);
+        const fetchData = async () => {
+            setIsLoading(true);
+            const { data: usersData } = await supabase.from('profiles').select('*');
+            const { data: missionsData } = await supabase.from('missions').select('*').order('created_at', { ascending: false });
+            const { data: transactionsData } = await supabase.from('transactions').select('*').order('created_at', { ascending: false });
+            const { data: noticesData } = await supabase.from('notices').select('*').order('created_at', { ascending: false });
+            const { data: votesData } = await supabase.from('votes').select('*').order('created_at', { ascending: false });
 
-            if (user) {
-                const updatedUser = parsedUsers.find((u: User) => u.id === user.id);
-                // Prevent infinite loop by comparing stringified objects
-                if (updatedUser && JSON.stringify(updatedUser) !== JSON.stringify(user)) {
-                    setUser(updatedUser);
+            if (usersData) setUsers(usersData as any);
+            if (missionsData) setMissions(missionsData as any);
+            if (transactionsData) setTransactions(transactionsData as any);
+            if (noticesData) setNotices(noticesData as any);
+            if (votesData) setVotes(votesData as any);
+            setIsLoading(false);
+        };
+
+        fetchData();
+
+        // Realtime Subscription
+        const channel = supabase
+            .channel('db-changes-child')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, (payload) => {
+                if (payload.eventType === 'INSERT') setUsers(prev => [...prev, payload.new as any]);
+                if (payload.eventType === 'UPDATE') {
+                    setUsers(prev => prev.map(u => u.id === payload.new.id ? payload.new as any : u));
+                    // Update current user if it matches
+                    if (user && user.id === payload.new.id) {
+                        setUser(payload.new as any);
+                    }
                 }
-            }
-        }
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'missions' }, (payload) => {
+                if (payload.eventType === 'INSERT') setMissions(prev => [payload.new as any, ...prev]);
+                if (payload.eventType === 'UPDATE') setMissions(prev => prev.map(m => m.id === payload.new.id ? payload.new as any : m));
+                if (payload.eventType === 'DELETE') setMissions(prev => prev.filter(m => m.id !== payload.old.id));
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+                if (payload.eventType === 'INSERT') setTransactions(prev => [payload.new as any, ...prev]);
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'notices' }, (payload) => {
+                // For now just basic updates
+                if (payload.eventType === 'INSERT') setNotices(prev => [payload.new as any, ...prev]);
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'votes' }, (payload) => {
+                if (payload.eventType === 'INSERT') setVotes(prev => [payload.new as any, ...prev]);
+                if (payload.eventType === 'UPDATE') setVotes(prev => prev.map(v => v.id === payload.new.id ? payload.new as any : v));
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(channel);
+        };
     }, [user]);
 
-    // Save to localStorage when user updates profile
-    const handleProfileUpdate = (newEmoji: string) => {
+    // Save to Supabase when user updates profile
+    const handleProfileUpdate = async (newEmoji: string) => {
         if (!user) return;
         const updatedUser = { ...user, profileImage: newEmoji };
-        setUser(updatedUser);
+        setUser(updatedUser); // Optimistic update
         setIsEditingProfile(false);
 
-        // Update in localStorage
-        const savedUsers = localStorage.getItem('magnetar_users');
-        const currentUsers = savedUsers ? JSON.parse(savedUsers) : MOCK_USERS;
-        const newUsers = currentUsers.map((u: User) => u.id === user.id ? updatedUser : u);
-        localStorage.setItem('magnetar_users', JSON.stringify(newUsers));
-        setUsers(newUsers); // Update local users list
-
-        // Dispatch storage event for other tabs
-        window.dispatchEvent(new Event('storage'));
+        await supabase.from('profiles').update({
+            profile_image: newEmoji
+        }).match({ id: user.id });
     };
 
     const EMOJIS = ['🐶', '🐱', '🐭', '🐹', '🐰', '🦊', '🐻', '🐼', '🐨', '🐯'];
 
     // Filter data for selected user
     const userMissions = missions.filter(m => m.userId === user?.id);
-    const userTransactions = MOCK_TRANSACTIONS.filter(t => t.userId === user?.id);
+    const userTransactions = transactions.filter(t => t.userId === user?.id);
 
-    const handleComplete = (id: string) => {
+    const handleComplete = async (id: string) => {
+        // Optimistic update
         setMissions(missions.map(m =>
             m.id === id ? { ...m, status: 'completed' } : m
         ));
+
+        await supabase.from('missions').update({ status: 'completed' }).match({ id });
     };
 
     if (!user) {
@@ -133,10 +172,20 @@ export default function ChildDashboard() {
                 <section>
                     <StickerBoard count={user.stickers} />
                     <div style={{ marginTop: '2rem' }}>
-                        <NoticeBoard notices={MOCK_NOTICES} readOnly={true} />
+                        <NoticeBoard notices={notices} readOnly={true} />
                         <SuggestionBox />
                         <div style={{ marginTop: '1rem' }}>
-                            <VotingSystem initialVote={MOCK_VOTES[0]} userId={user.id} />
+                            <VotingSystem
+                                initialVote={votes[0]}
+                                userId={user.id}
+                                onUpdate={async (updatedVote) => {
+                                    // Handle voting update (increment count)
+                                    await supabase.from('votes').update({
+                                        options: updatedVote.options,
+                                        hasVotedUsers: updatedVote.hasVotedUsers
+                                    }).match({ id: updatedVote.id });
+                                }}
+                            />
                         </div>
                     </div>
                 </section>

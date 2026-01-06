@@ -29,13 +29,15 @@ export const VotingSystem = ({ initialVote, userId, onUpdate }: { initialVote: V
 
     const handleVote = () => {
         if (!selectedOption || !userId) return;
-        setVote({
+        const newVote = {
             ...vote,
             options: vote.options.map(opt =>
                 opt.id === selectedOption ? { ...opt, count: opt.count + 1 } : opt
             ),
             hasVotedUsers: [...vote.hasVotedUsers, userId]
-        });
+        };
+        setVote(newVote);
+        onUpdate?.(newVote);
     };
 
     return (
